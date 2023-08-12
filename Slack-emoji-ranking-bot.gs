@@ -40,9 +40,11 @@ function collectEmojiRanking() {
   const emojiCounts = {}
 
   // 現在の日時から1ヶ月前のUNIXタイムスタンプを計算
-  const oneMonthAgo = new Date()
-  oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1)
-  const oldestTimestamp = Math.floor(oneMonthAgo.getTime() / 1000)
+  const today = new Date()
+  today.setMonth(today.getMonth() - 1)
+  // console.log(today)
+  const oldestTimestamp = Math.floor(today.getTime() / 1000)
+  // console.log(oldestTimestamp)
 
   channelIds.forEach(channelId => {
     // Slack APIのURLを設定
