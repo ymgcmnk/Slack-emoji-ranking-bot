@@ -32,25 +32,46 @@ function getAllChannelIds() {
 
 
 /**
- * Slackのワークスペースでの会話において、直近1ヶ月間の利用されている絵文字のランキングを集計する関数。
- * @return {string} トップ10の絵文字とその使用回数の文字列。
+ * メッセージから絵文字を集計する関数。
+ * @param {Object} message - Slackのメッセージオブジェクト。
+ * @param {Object} emojiCounts - 絵文字の使用回数を集計するオブジェクト。
  */
-function collectEmojiRanking() {
-  const channelIds = getAllChannelIds()
-  const emojiCounts = {}
+function countEmojisFromMessage(message, emojiCounts) {
+  // 会話のテキスト内の絵文字を集計
+  const emojisInText = (message.text || "").match(/:(\w+):/g) || []
+  emojisInText.forEach(emoji => {
+    if (!emojiCounts[emoji]) {
+      emojiCounts[emoji] = 0
+    }
+    emojiCounts[emoji]++
+  });
 
-  // 現在の日時から1ヶ月前のUNIXタイムスタンプを計算
-  const today = new Date()
-  today.setMonth(today.getMonth() - 1)
-  // console.log(today)
-  const oldestTimestamp = Math.floor(today.getTime() / 1000)
-  // console.log(oldestTimestamp)
+  // リアクションとして追加された絵文字を集計
+  if (message.reactions) {
+    message.reactions.forEach(reaction => {
+      const emoji = `:${reaction.name}:`
+      if (!emojiCounts[emoji]) {
+        emojiCounts[emoji] = 0
+      }
+      // リアクションの回数（count）を絵文字の使用回数に追加
+      emojiCounts[emoji] += reaction.count
+    });
+  }
+}
 
-  channelIds.forEach(channelId => {
-    // Slack APIのURLを設定
+/**
+ * 特定のチャンネルのメッセージ履歴を取得する関数。
+ * @param {string} channelId - SlackのチャンネルID。
+ * @param {number} oldestTimestamp - 集計開始のUNIXタイムスタンプ。
+ * @return {Array} チャンネルのメッセージ履歴。
+ */
+function fetchChannelHistory(channelId, oldestTimestamp) {
+  let hasMore = true
+  let cursor = null
+  const allMessages = []
+
+  while (hasMore) {
     const url = `https://slack.com/api/conversations.history`
-
-    // APIリクエストのオプションを設定
     const options = {
       method: "get",
       contentType: "application/x-www-form-urlencoded",
@@ -58,39 +79,31 @@ function collectEmojiRanking() {
       payload: {
         "channel": channelId,
         "limit": 1000,
-        "oldest": oldestTimestamp  // 1ヶ月前のタイムスタンプを指定
+        "oldest": oldestTimestamp,
+        "cursor": cursor
       }
-    };
+    }
 
-    // Slack APIからメッセージ履歴を取得
     const historyResponse = UrlFetchApp.fetch(url, options)
-    const messages = JSON.parse(historyResponse.getContentText()).messages || []
+    const data = JSON.parse(historyResponse.getContentText())
 
-    messages.forEach(message => {
-      // 会話のテキスト内の絵文字を集計
-      const emojisInText = (message.text || "").match(/:(\w+):/g) || []
-      emojisInText.forEach(emoji => {
-        if (!emojiCounts[emoji]) {
-          emojiCounts[emoji] = 0
-        }
-        emojiCounts[emoji]++
-      })
+    if (data.messages) {
+      allMessages.push(...data.messages)
+    }
 
-      // リアクションとして追加された絵文字を集計
-      if (message.reactions) {
-        message.reactions.forEach(reaction => {
-          const emoji = `:${reaction.name}:`
-          if (!emojiCounts[emoji]) {
-            emojiCounts[emoji] = 0
-          }
-          // リアクションの回数（count）を絵文字の使用回数に追加
-          emojiCounts[emoji] += reaction.count
-        })
-      }
-    })
-  })
+    hasMore = data.has_more
+    cursor = data.response_metadata ? data.response_metadata.next_cursor : null
+  }
 
-  // 絵文字の使用回数を降順にソートして、トップ10の絵文字を取得
+  return allMessages
+}
+
+/**
+ * 絵文字のランキングを生成する関数。
+ * @param {Object} emojiCounts - 絵文字の使用回数を集計するオブジェクト。
+ * @return {string} トップ10の絵文字とその使用回数の文字列。
+ */
+function generateEmojiRanking(emojiCounts) {
   const sortedEmojiCounts = Object.entries(emojiCounts).sort((a, b) => b[1] - a[1]).slice(0, 10)
 
   let rank = 0
@@ -111,6 +124,29 @@ function collectEmojiRanking() {
   return result
 }
 
+/**
+ * Slackのワークスペースでの会話において、直近1ヶ月間の利用されている絵文字のランキングを集計する関数。
+ * @return {string} トップ10の絵文字とその使用回数の文字列。
+ */
+function collectEmojiRanking() {
+  const channelIds = getAllChannelIds()
+  const emojiCounts = {}
+
+  // 現在の日時から1ヶ月前のUNIXタイムスタンプを計算
+  const today = new Date()
+  today.setMonth(today.getMonth() - 1)
+  const oldestTimestamp = Math.floor(today.getTime() / 1000)
+
+  channelIds.forEach(channelId => {
+    const messages = fetchChannelHistory(channelId, oldestTimestamp)
+    messages.forEach(message => {
+      countEmojisFromMessage(message, emojiCounts)
+    })
+  })
+
+  return generateEmojiRanking(emojiCounts)
+}
+
 
 /**
  * 絵文字のランキングをSlackの指定されたチャンネルに投稿する関数。
@@ -128,7 +164,7 @@ function postEmojiRankingToSlack() {
       "channel": POST_CHANNEL_ID,
       "text": `直近1ヶ月 Slack　絵文字ランキング:\n${top10Emojis}`
     }
-  };
+  }
 
   UrlFetchApp.fetch(url, options)
 }
